@@ -7,7 +7,7 @@ export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   mongoUri: process.env.MONGODB_URI || '',
   clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
-  sessionSecret: process.env.SESSION_SECRET || '',
+  authTokenSecret: process.env.AUTH_TOKEN_SECRET || process.env.SESSION_SECRET || '',
   siweDomain: process.env.SIWE_DOMAIN || new URL(process.env.CLIENT_ORIGIN || 'http://localhost:5173').host,
   chainId,
   telegramTaskChannel: process.env.TELEGRAM_TASK_CHANNEL || '@GHM21_tasks',

@@ -1,28 +1,32 @@
 import { Router } from 'express';
 import { SiweMessage, generateNonce } from 'siwe';
 import User from '../models/User.js';
+import AuthNonce from '../models/AuthNonce.js';
 import { env } from '../config/env.js';
+import { createAuthToken } from '../utils/authToken.js';
 
 const router = Router();
-const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 
 router.get('/me', asyncRoute(async (req, res) => {
-  if (!req.session?.userId) return res.status(401).json({ message: 'Not authenticated.' });
-  const user = await User.findById(req.session.userId).select('walletAddress displayAddress profile telegramChatId telegramHandle').lean();
-  if (!user) return res.status(401).json({ message: 'Session user no longer exists.' });
+  if (!req.auth?.userId) return res.status(401).json({ message: 'Not authenticated.' });
+  const user = await User.findById(req.auth.userId).select('walletAddress displayAddress profile telegramChatId telegramHandle').lean();
+  if (!user || user.walletAddress.toLowerCase() !== req.auth.walletAddress) {
+    return res.status(401).json({ message: 'Authentication token is no longer valid.' });
+  }
   res.json({ userId: String(user._id), walletAddress: user.walletAddress, displayAddress: user.displayAddress, profile: user.profile, telegramHandle: user.telegramHandle || '' });
 }));
 
-router.get('/nonce', (req, res) => {
-  req.session.siweNonce = generateNonce();
+router.get('/nonce', asyncRoute(async (_req, res) => {
+  const nonce = generateNonce();
+  await AuthNonce.create({ nonce, expiresAt: new Date(Date.now() + 5 * 60 * 1000) });
   res.set('Cache-Control', 'no-store');
-  res.json({ nonce: req.session.siweNonce });
-});
+  res.json({ nonce });
+}));
 
 router.post('/verify', asyncRoute(async (req, res) => {
-  const { message, signature } = req.body || {};
-  const expectedNonce = req.session?.siweNonce;
-  if (typeof message !== 'string' || typeof signature !== 'string' || !expectedNonce) {
+  const { message, signature, nonce } = req.body || {};
+  if (typeof message !== 'string' || typeof signature !== 'string' || typeof nonce !== 'string') {
     return res.status(400).json({ message: 'Request requires a fresh nonce, SIWE message, and signature.' });
   }
 
@@ -30,15 +34,28 @@ router.post('/verify', asyncRoute(async (req, res) => {
   try { siweMessage = new SiweMessage(message); }
   catch { return res.status(400).json({ message: 'Invalid SIWE message.' }); }
 
-  if (siweMessage.domain !== env.siweDomain || Number(siweMessage.chainId) !== env.chainId) {
-    return res.status(401).json({ message: 'SIWE domain or blockchain network does not match this application.' });
-  }
-  const allowedOrigin = new URL(env.clientOrigin).origin;
-  if (new URL(siweMessage.uri).origin !== allowedOrigin) {
-    return res.status(401).json({ message: 'SIWE origin does not match the configured client origin.' });
+  const challenge = await AuthNonce.findOneAndUpdate(
+    { nonce, usedAt: null, expiresAt: { $gt: new Date() } },
+    { $set: { usedAt: new Date() } }
+  );
+  if (!challenge || siweMessage.nonce !== nonce) {
+    return res.status(400).json({ message: 'Sign-in request expired or already used. Please retry.' });
   }
 
-  const verification = await siweMessage.verify({ signature, nonce: expectedNonce, domain: env.siweDomain });
+  let siweUri;
+  try { siweUri = new URL(siweMessage.uri); }
+  catch { return res.status(401).json({ message: 'SIWE URI is invalid.' }); }
+
+  const configuredOrigin = new URL(env.clientOrigin).origin;
+  const isConfiguredClient = siweUri.origin === configuredOrigin && siweMessage.domain === env.siweDomain;
+  // Local Vite development reaches the production API through its /api proxy.
+  const localDevOrigins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
+  const isLocalDevClient = localDevOrigins.has(siweUri.origin) && siweMessage.domain === siweUri.host;
+  if ((!isConfiguredClient && !isLocalDevClient) || Number(siweMessage.chainId) !== env.chainId) {
+    return res.status(401).json({ message: 'SIWE domain or blockchain network does not match this application.' });
+  }
+
+  const verification = await siweMessage.verify({ signature, nonce, domain: siweMessage.domain });
   if (!verification.success) return res.status(401).json({ message: 'Wallet signature verification failed.' });
 
   const walletAddress = siweMessage.address.toLowerCase();
@@ -48,20 +65,10 @@ router.post('/verify', asyncRoute(async (req, res) => {
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 
-  await new Promise((resolve, reject) => req.session.regenerate((error) => error ? reject(error) : resolve()));
-  req.session.userId = String(user._id);
-  req.session.walletAddress = walletAddress;
-  req.session.chainId = env.chainId;
-  await new Promise((resolve, reject) => req.session.save((error) => error ? reject(error) : resolve()));
-  res.json({ authenticated: true, walletAddress, userId: String(user._id) });
+  res.json({ authenticated: true, walletAddress, userId: String(user._id), authToken: createAuthToken(user) });
 }));
 
-router.post('/logout', (req, res, next) => {
-  if (!req.session) return res.json({ ok: true });
-  req.session.destroy((error) => {
-    if (error) return next(error);
-    res.clearCookie('ghm21.sid', { httpOnly: true, secure: env.nodeEnv === 'production', sameSite: 'lax' });
-    res.json({ ok: true });
-  });
-});
+// Bearer tokens are stateless; logout is completed by deleting the browser's token.
+router.post('/logout', (_req, res) => res.json({ ok: true }));
+
 export default router;

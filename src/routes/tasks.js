@@ -142,7 +142,7 @@ async function sendTaskToTelegram(task, files) {
 router.post('/recover', requireAuth, upload.array('attachments', 5), asyncRoute(async (req, res) => {
   const transactionHash = String(req.body?.transactionHash || '').trim().toLowerCase();
   if (!/^0x[0-9a-f]{64}$/.test(transactionHash)) return res.status(400).json({ message: 'A confirmed Polygon Mainnet task transaction hash is required.' });
-  const user = await User.findById(req.session.userId).select('walletAddress telegramHandle').lean();
+  const user = await User.findById(req.auth.userId).select('walletAddress telegramHandle').lean();
   if (!user) return res.status(401).json({ message: 'Wallet profile not found. Sign in again.' });
 
   const existing = await TaskSubmission.findOne({ transactionHash }).lean();
@@ -189,7 +189,7 @@ router.get('/', asyncRoute(async (req, res) => {
   const ids = items.map(item => item._id);
   const [likes, myLikes] = await Promise.all([
     TaskLike.aggregate([{ $match: { task: { $in: ids } } }, { $group: { _id: '$task', count: { $sum: 1 } } }]),
-    req.session?.userId ? TaskLike.find({ task: { $in: ids }, user: req.session.userId }).select('task').lean() : []
+    req.auth?.userId ? TaskLike.find({ task: { $in: ids }, user: req.auth.userId }).select('task').lean() : []
   ]);
   const likeMap = new Map(likes.map(row => [String(row._id), row.count]));
   const likedSet = new Set(myLikes.map(row => String(row.task)));
@@ -222,7 +222,7 @@ router.post('/', requireAuth, upload.array('attachments', 5), asyncRoute(async (
   let parsedUrl; try { parsedUrl = new URL(proofLink); } catch { return res.status(400).json({ message: 'A valid proof URL is required.' }); }
   if (!['https:', 'http:'].includes(parsedUrl.protocol)) return res.status(400).json({ message: 'Proof URL must use HTTP or HTTPS.' });
   if (!/^0x[0-9a-fA-F]{64}$/.test(transactionHash)) return res.status(400).json({ message: `A confirmed ${polygonChainName} transaction hash is required.` });
-  const user = await User.findById(req.session.userId).select('walletAddress telegramHandle').lean();
+  const user = await User.findById(req.auth.userId).select('walletAddress telegramHandle').lean();
   if (!user) return res.status(401).json({ message: 'Wallet profile not found. Sign in again.' });
   await verifyProtocolTransaction(transactionHash, user.walletAddress, 'submitTask(string,string)');
   const attachments = await saveAttachments(req.files, { walletAddress: user.walletAddress, taskTitle });
@@ -235,23 +235,23 @@ router.post('/:taskId/like', requireAuth, asyncRoute(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.taskId)) return res.status(400).json({ message: 'Invalid task ID.' });
   const task = await TaskSubmission.exists({ _id: req.params.taskId });
   if (!task) return res.status(404).json({ message: 'Task not found.' });
-  const existing = await TaskLike.findOne({ task: task._id, user: req.session.userId });
+  const existing = await TaskLike.findOne({ task: task._id, user: req.auth.userId });
   if (existing) { await existing.deleteOne(); return res.json({ liked: false }); }
-  try { await TaskLike.create({ task: task._id, user: req.session.userId }); } catch (error) { if (error.code !== 11000) throw error; }
+  try { await TaskLike.create({ task: task._id, user: req.auth.userId }); } catch (error) { if (error.code !== 11000) throw error; }
   res.json({ liked: true });
 }));
 router.post('/:taskId/verify-record', requireAuth, asyncRoute(async (req, res) => {
-  if (req.session.walletAddress !== env.auditorWallet) return res.status(403).json({ message: 'Only the configured auditor wallet can verify a task.' });
+  if (req.auth.walletAddress !== env.auditorWallet) return res.status(403).json({ message: 'Only the configured auditor wallet can verify a task.' });
   if (!mongoose.isValidObjectId(req.params.taskId)) return res.status(400).json({ message: 'Invalid task ID.' });
   const transactionHash = String(req.body?.transactionHash || '');
   if (!/^0x[0-9a-fA-F]{64}$/.test(transactionHash)) return res.status(400).json({ message: 'Confirmed verification transaction hash is required.' });
-  await verifyProtocolTransaction(transactionHash, req.session.walletAddress, 'verifyTask(uint256)');
+  await verifyProtocolTransaction(transactionHash, req.auth.walletAddress, 'verifyTask(uint256)');
   const task = await TaskSubmission.findByIdAndUpdate(req.params.taskId, { $set: { isVerified: true, rejectionReason: '', verificationTransactionHash: transactionHash } }, { new: true });
   if (!task) return res.status(404).json({ message: 'Task not found.' });
   res.json({ verified: true, id: String(task._id) });
 }));
 router.post('/:taskId/reject', requireAuth, asyncRoute(async (req, res) => {
-  if (req.session.walletAddress !== env.auditorWallet) return res.status(403).json({ message: 'Only the configured auditor wallet can reject a task.' });
+  if (req.auth.walletAddress !== env.auditorWallet) return res.status(403).json({ message: 'Only the configured auditor wallet can reject a task.' });
   if (!mongoose.isValidObjectId(req.params.taskId)) return res.status(400).json({ message: 'Invalid task ID.' });
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
   if (!reason || reason.length > 1000) return res.status(400).json({ message: 'A rejection reason (maximum 1000 characters) is required.' });
@@ -266,11 +266,11 @@ router.post('/:taskId/tip-record', requireAuth, asyncRoute(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.taskId)) return res.status(400).json({ message: 'Invalid task ID.' });
   const transactionHash = String(req.body?.transactionHash || '');
   if (!/^0x[0-9a-fA-F]{64}$/.test(transactionHash)) return res.status(400).json({ message: 'Confirmed transaction hash is required.' });
-  await verifyProtocolTransaction(transactionHash, req.session.walletAddress, 'tipTask(uint256,uint256)');
+  await verifyProtocolTransaction(transactionHash, req.auth.walletAddress, 'tipTask(uint256,uint256)');
   const task = await TaskSubmission.findById(req.params.taskId);
   if (!task) return res.status(404).json({ message: 'Task not found.' });
   try {
-    await TaskTip.create({ task: task._id, user: req.session.userId, transactionHash: transactionHash.toLowerCase() });
+    await TaskTip.create({ task: task._id, user: req.auth.userId, transactionHash: transactionHash.toLowerCase() });
     const updatedTask = await TaskSubmission.findByIdAndUpdate(task._id, { $inc: { tipCount: 1 } }, { new: true });
     task.tipCount = updatedTask.tipCount;
   } catch (error) {

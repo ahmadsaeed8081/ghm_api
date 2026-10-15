@@ -8,7 +8,7 @@ const router = Router();
 
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const user = await User.findById(req.session.userId).select('walletAddress displayAddress telegramHandle profile').lean();
+    const user = await User.findById(req.auth.userId).select('walletAddress displayAddress telegramHandle profile').lean();
     if (!user) return res.status(404).json({ message: 'User profile not found.' });
     res.json({ user: { ...user, id: String(user._id) } });
   } catch (error) { next(error); }
@@ -28,7 +28,7 @@ router.put('/me', requireAuth, async (req, res, next) => {
       if (!Number.isFinite(selectedTier) || selectedTier < 1 || selectedTier > 10000) return res.status(400).json({ message: 'Selected tier must be between 1 and 10000.' });
       update['profile.selectedTier'] = selectedTier;
     }
-    const user = await User.findByIdAndUpdate(req.session.userId, { $set: update }, { new: true, runValidators: true }).select('walletAddress displayAddress telegramHandle profile').lean();
+    const user = await User.findByIdAndUpdate(req.auth.userId, { $set: update }, { new: true, runValidators: true }).select('walletAddress displayAddress telegramHandle profile').lean();
     if (!user) return res.status(404).json({ message: 'User profile not found.' });
     res.json({ user: { ...user, id: String(user._id) } });
   } catch (error) { next(error); }
@@ -39,7 +39,7 @@ router.put('/me', requireAuth, async (req, res, next) => {
 // were keyed by array position and cannot be safely mapped to database task IDs.
 router.post('/migrate-legacy', requireAuth, async (req, res, next) => {
   try {
-    const user = await User.findById(req.session.userId);
+    const user = await User.findById(req.auth.userId);
     if (!user) return res.status(401).json({ message: 'Wallet profile not found.' });
     if (user.legacyMigratedAt) return res.json({ migrated: true, alreadyMigrated: true });
     const payload = req.body || {};

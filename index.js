@@ -6,8 +6,8 @@ let mongoConnection;
 
 function assertProductionConfig() {
   if (env.nodeEnv !== 'production') return;
-  if (!env.sessionSecret || env.sessionSecret.length < 32 || /replace|change|example|secret/i.test(env.sessionSecret)) {
-    throw new Error('SESSION_SECRET must be a random value of at least 32 characters.');
+  if (!env.authTokenSecret || env.authTokenSecret.length < 32 || /replace|change|example|secret/i.test(env.authTokenSecret)) {
+    throw new Error('AUTH_TOKEN_SECRET (or legacy SESSION_SECRET) must be a random value of at least 32 characters.');
   }
   if (env.clientOrigin === 'http://localhost:5173') {
     throw new Error('CLIENT_ORIGIN must be set to the deployed client origin.');

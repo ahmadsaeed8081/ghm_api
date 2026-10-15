@@ -6,8 +6,8 @@ if (!env.mongoUri) {
   console.error('MONGODB_URI is required. Copy .env.example to .env and configure it.');
   process.exit(1);
 }
-if (env.nodeEnv === 'production' && (!env.sessionSecret || env.sessionSecret.length < 32 || /replace|change|example|secret/i.test(env.sessionSecret))) {
-  console.error('SESSION_SECRET must be set to a random value of at least 32 characters in production.');
+if (env.nodeEnv === 'production' && (!env.authTokenSecret || env.authTokenSecret.length < 32 || /replace|change|example|secret/i.test(env.authTokenSecret))) {
+  console.error('AUTH_TOKEN_SECRET (or legacy SESSION_SECRET) must be set to a random value of at least 32 characters in production.');
   process.exit(1);
 }
 await mongoose.connect(env.mongoUri);
